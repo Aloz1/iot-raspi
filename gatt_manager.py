@@ -6,6 +6,8 @@ import pynmea2
 import logging
 import redis
 
+from datetime import datetime
+
 logger = logging.getLogger(__name__)
 
 r = redis.Redis()
@@ -126,22 +128,39 @@ class GPSDevice(GenericDevice):
 
 				# Parse input
 				if isinstance(msg, pynmea2.GGA):
+					if msg.gps_qual > 5:
+						logger.debug('No lock')
+						logger.debug(repr(msg))
+						continue
+
 					self.next_package.timestamp = msg.timestamp
 					self.next_package.lat = msg.lat + msg.lat_dir
 					self.next_package.lng = msg.lon + msg.lon_dir
 					self.next_package.alt = '{:3f}{}'.format(msg.altitude, msg.altitude_units)
 					self.next_package.gps_qual = msg.gps_qual
 					self.next_package.num_sats = msg.num_sats
+
 				elif isinstance(msg, pynmea2.RMC):
 					self.next_package.datestamp = msg.datestamp
 					self.next_package.speed = msg.spd_over_grnd * 1.852 # Convert to KM/H
 					self.next_package.dir = msg.true_course
 
-					if (self.next_package.is_valid() and msg.status == 'A'
-							and self.next_package.gps_qual < 5):
+					if (self.next_package.is_valid()):
 						logger.debug(str(self.next_package))
 						# Do redis stuff here
-						pass
+						keyid = datetime.combine(
+									self.next_package.datestamp,
+									self.next_package.timestamp
+								).isoformat()
+						r.rpush('gpsentries', keyid)
+						r.hmset('gpsdata:{}'.format(keyid),
+								{
+									'latitude'  : self.next_package.lat,
+									'longitude' : self.next_package.lng,
+									'altitude'  : self.next_package.alt,
+									'speed'     : self.next_package.speed,
+									'direction' : self.next_package.dir
+								})
 
 					self.next_package = self.NextPackage()
 
@@ -223,5 +242,7 @@ if __name__ == '__main__':
 	try:
 		manager.run()
 	except KeyboardInterrupt:
-		manager.remove_all_devices()
+		for device in manager.devices():
+			if device.is_connected():
+				device.disconnect()
 		manager.stop()
