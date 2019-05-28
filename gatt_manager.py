@@ -59,7 +59,40 @@ class GPSDevice(GenericDevice):
 	CHARACTERISTIC_UUID_RX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
 	class NextPackage:
-		pass
+		def __init__(self):
+			self.datestamp = None
+			self.timestamp = None
+			self.lat = None
+			self.lng = None
+			self.alt = None
+			self.gps_qual = 0
+			self.num_sats = 0
+			self.h_dil = None
+			self.speed = None
+			self.dir   = None
+
+		def __repr__(self):
+			msg =  '{}(datestamp={},timestamp={},lat={},lng={},alt={},gps_qual={},num_sats={},speed={},dir={})'
+			return msg.format(
+					type(self).__name__,
+					repr(self.datestamp),
+					repr(self.timestamp),
+					repr(self.lat),
+					repr(self.lng),
+					repr(self.alt),
+					repr(self.gps_qual),
+					repr(self.num_sats),
+					repr(self.speed),
+					repr(self.dir))
+
+		def is_valid(self):
+			return (self.datestamp is not None and
+					self.timestamp is not None and
+					self.lat is not None and
+					self.lng is not None and
+					self.alt is not None and
+					self.speed is not None and
+					self.dir is not None)
 
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
@@ -74,56 +107,56 @@ class GPSDevice(GenericDevice):
 		chrstc.enable_notifications()
 	
 	def characteristic_value_updated(self, characteristic, value):
-		logger.debug('Got characteristic value [{}]: {}'.format(str(characteristic.uuid), value.decode()))
-
 		self.buffer += value.decode()
 		split = self.buffer.splitlines()
-		self.buffer = split[-1]
 
-		for line in split[0:-1]:
-			logger.debug(line)
-			msg = pynmea2.parse(line)
-			# Should probably parse input and only push lat-long and other data
-			if isinstance(msg, pynmea2.GGA):
-				# timestamp
-				# lat
-				# lat_dir - N/S
-				# lon
-				# lon_dir - E/W
-				# gps_qual - FIX AVAIL (0 - no, 1 - yes, 2 - differential)
-				# num_sats
-				# horizontal_dil - Horizontal Dilution of precision
-				# altitude_units - Altitude above sea level
-				# geo_sep - Ignore
-				# geo_sep_units - Ignore
-				# age_gps_data - Differential GPS age
-				pass
-			elif isinstance(msg, pynmea2.RMC):
-				# timestamp
-				# status - 'A' = Data valid, 'V' = Data not valid
-				# lat
-				# lat_dir - N/S
-				# lon
-				# lon_dir - E/W
-				# spd_over_grnd - Knots
-				# true_course - Degrees from north
-				# datestamp
-				# mag_variation - Not used
-				# mag_var - 'A' = Autonomous, 'D' = Differential, 'E' = Estimated
-				pass
-			elif isinstance(msg, pynmea2.VTG):
-				# true_track - True bearing
-				# true_track_sym - True bearing reference (always 'T' for true)
-				# mag_track - Magnetic bearing
-				# mag_track_sym - Magnetic bearing reference (always 'M' for magnetic)
-				# spd_over_grnd_kts - Horizontal ground speed in knots
-				# spd_over_grnd_knts_sym - N for knots
-				# spd_over_grnd_kmph - Horizontal ground speed in km/h
-				# spd_over_grnd_kmph_sym - K for kilometers
-				# faa_mode - 'A' = autonomous, 'D' = Differential, 'E' = Estimated
-				pass
+		# Fix buffer and split so that we don't have half lines
+		if len(split) >= 0:
+			if len(split[-1]) >= 3 and split[-1][-3] == '*':
+				self.buffer = ''
+			else:
+				self.buffer = split[-1]
+				split = split[0:-1]
 
-			logger.debug(str(line))
+		for line in split:
+			try:
+				msg = pynmea2.parse(line)
+
+				logger.debug(line)
+
+				# Parse input
+				if isinstance(msg, pynmea2.GGA):
+					self.next_package.timestamp = msg.timestamp
+					self.next_package.lat = msg.lat + msg.lat_dir
+					self.next_package.lng = msg.lon + msg.lon_dir
+					self.next_package.alt = '{:3f}{}'.format(msg.altitude, msg.altitude_units)
+					self.next_package.gps_qual = msg.gps_qual
+					self.next_package.num_sats = msg.num_sats
+				elif isinstance(msg, pynmea2.RMC):
+					self.next_package.datestamp = msg.datestamp
+					self.next_package.speed = msg.spd_over_grnd * 1.852 # Convert to KM/H
+					self.next_package.dir = msg.true_course
+
+					if (self.next_package.is_valid() and msg.status == 'A'
+							and self.next_package.gps_qual < 5):
+						logger.debug(str(self.next_package))
+						# Do redis stuff here
+						pass
+
+					self.next_package = self.NextPackage()
+
+			except pynmea2.ChecksumError as e:
+				((msg, line),) = e.args
+
+				logger.info('NMEA: {}: Skipping sentence'.format(msg))
+				logger.debug('\t{}'.format(line))
+
+			except pynmea2.ParseError as e:
+				((msg, line),) = e.args
+
+				logger.warn('NMEA: {}: Skipping sentence'.format(msg))
+				logger.debug('\t{}'.format(line))
+
 		
 
 class IMUDevice(GenericDevice):
@@ -160,7 +193,7 @@ class AnyDeviceManager(gatt.DeviceManager):
 	}
 
 	def device_discovered(self, device):
-		logging.debug('Found device [{}] type "{}"'.format(device.mac_address, type(device)))
+		#logging.debug('Found device [{}] type "{}"'.format(device.mac_address, type(device)))
 		if type(device) is not gatt.Device and not device.is_connected():
 			logging.debug('Attempting connection with [{}]'.format(device.mac_address))
 			device.connect()
@@ -190,8 +223,5 @@ if __name__ == '__main__':
 	try:
 		manager.run()
 	except KeyboardInterrupt:
-		for device in manager.devices():
-			if device.is_connected():
-				device.disconnect()
-
+		manager.remove_all_devices()
 		manager.stop()
