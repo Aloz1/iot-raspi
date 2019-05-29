@@ -11,6 +11,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 r = redis.Redis()
+data_session = r.incr('sessioncounter')
 
 class GenericDevice(gatt.Device):
 	def connect_succeeded(self):
@@ -128,7 +129,7 @@ class GPSDevice(GenericDevice):
 
 				# Parse input
 				if isinstance(msg, pynmea2.GGA):
-					if msg.gps_qual > 5:
+					if msg.gps_qual == 0:
 						logger.debug('No lock')
 						logger.debug(repr(msg))
 						continue
@@ -136,7 +137,7 @@ class GPSDevice(GenericDevice):
 					self.next_package.timestamp = msg.timestamp
 					self.next_package.lat = msg.lat + msg.lat_dir
 					self.next_package.lng = msg.lon + msg.lon_dir
-					self.next_package.alt = '{:3f}{}'.format(msg.altitude, msg.altitude_units)
+					self.next_package.alt = '{:.2f}{}'.format(msg.altitude, msg.altitude_units)
 					self.next_package.gps_qual = msg.gps_qual
 					self.next_package.num_sats = msg.num_sats
 
@@ -155,6 +156,7 @@ class GPSDevice(GenericDevice):
 						r.rpush('gpsentries', keyid)
 						r.hmset('gpsdata:{}'.format(keyid),
 								{
+									'session'   : session,
 									'latitude'  : self.next_package.lat,
 									'longitude' : self.next_package.lng,
 									'altitude'  : self.next_package.alt,
