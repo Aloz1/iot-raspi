@@ -156,7 +156,7 @@ class GPSDevice(GenericDevice):
 						r.rpush('gpsentries', keyid)
 						r.hmset('gpsdata:{}'.format(keyid),
 								{
-									'session'   : session,
+									'session'   : data_session,
 									'latitude'  : self.next_package.lat,
 									'longitude' : self.next_package.lng,
 									'altitude'  : self.next_package.alt,

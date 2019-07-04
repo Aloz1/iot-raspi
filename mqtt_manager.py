@@ -51,8 +51,7 @@ if __name__ == '__main__':
 
 	try:
 		while True:
-			#while r.llen('gpsentries') > 0:
-			if True:
+			while r.llen('gpsentries') > 0:
 				keyid = r.lindex('gpsentries', 0).decode()
 
 				entryid = 'gpsdata:{}'.format(keyid)
@@ -62,6 +61,7 @@ if __name__ == '__main__':
 				msg = json.dumps(data)
 
 				mqttc.publish('gps-data/{}'.format(platform.node()), msg, qos=1)
+				print('Published [{}]: {}'.format(platform.node(), msg))
 
 				# After everything else, so that if we have an error, the data can be
 				# retransmitted later
